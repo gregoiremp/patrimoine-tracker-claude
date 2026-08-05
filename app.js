@@ -43,6 +43,22 @@ const PLACEMENT_TO_ACCOUNT_TYPE = {
   "compte titres": "cto",
 };
 
+// Pour les relevés sans colonne "Catégorie" (ex : export de positions PEA/CTO type
+// BoursoBank) : les fonds/ETF concentrés sur un secteur, une zone ou une classe
+// d'actifs alternative sont classés en Performance ; les fonds larges/diversifiés
+// par défaut en Croissance. Classification heuristique, à vérifier ligne à ligne.
+const PERFORMANCE_NAME_HINTS = [
+  "small cap", "banks", "bank", "emergent", "emerging", "secteur", "sector",
+  "technolog", "digital security", "cyber", "immobilier", "reit", "foncier",
+  "private equity", "biotech", "crypto", "leverage", "levier", "short",
+  "commodit", "matieres premieres", "high yield",
+];
+
+function guessRiskBucketFromName(name) {
+  const n = normalizeHeader(name || "");
+  return PERFORMANCE_NAME_HINTS.some(k => n.includes(normalizeHeader(k))) ? "performance" : "croissance";
+}
+
 const DEFAULT_CATEGORIES = [
   { id: "logement", name: "Logement", color: "#6c8cff", keywords: ["loyer", "edf", "engie", "eau", "syndic", "assurance habitation"] },
   { id: "alimentation", name: "Alimentation", color: "#3ecf8e", keywords: ["carrefour", "leclerc", "monoprix", "franprix", "lidl", "auchan", "boulangerie"] },
@@ -719,25 +735,35 @@ function showImportPreview(rows) {
 
 /* ---------- Import d'un relevé de supports (assurance-vie, PEA…) ---------- */
 
+// Couvre à la fois les exports "tous comptes" façon Linxea (colonnes en français,
+// avec Catégorie / N° Contrat / Produit) et les exports de positions façon BoursoBank
+// (colonnes courtes, souvent en anglais, sans Catégorie ni regroupement par contrat).
 const HOLDINGS_HEADERS = {
   placement: ["placement"],
   contract: ["n° contrat", "no contrat", "numero contrat", "n contrat"],
   product: ["produit"],
   category: ["categorie"],
   subcategory: ["sous-categorie", "sous categorie"],
-  name: ["nom du support"],
+  name: ["nom du support", "name"],
   isin: ["isin"],
-  units: ["nbre de parts", "nombre de parts"],
-  lastQuote: ["derniere cotation"],
+  units: ["nbre de parts", "nombre de parts", "quantity", "quantite"],
+  lastQuote: ["derniere cotation", "lastprice", "last price"],
   quoteDate: ["date"],
-  amount: ["somme en compte"],
-  pnl: ["plus ou moins value"],
-  pru: ["prix de revient moyen"],
+  amount: ["somme en compte", "amount"],
+  pnl: ["plus ou moins value", "amountvariation", "amount variation"],
+  pru: ["prix de revient moyen", "buyingprice", "buying price"],
 };
 
 function detectHoldingsColumns(headerRow) {
   const norm = headerRow.map(normalizeHeader);
-  const find = (candidates) => norm.findIndex(h => candidates.some(c => h === normalizeHeader(c) || h.includes(normalizeHeader(c))));
+  // Passe 1 : correspondance exacte (évite qu'un candidat court comme "amount"
+  // matche par erreur une colonne "amountVariation"). Passe 2 : sous-chaîne, en repli.
+  const find = (candidates) => {
+    const normCandidates = candidates.map(normalizeHeader);
+    let idx = norm.findIndex(h => normCandidates.includes(h));
+    if (idx === -1) idx = norm.findIndex(h => normCandidates.some(c => h.includes(c)));
+    return idx;
+  };
   const cols = {};
   Object.entries(HOLDINGS_HEADERS).forEach(([key, candidates]) => { cols[key] = find(candidates); });
   return cols;
@@ -752,7 +778,7 @@ function riskSplitFromHoldings(holdings) {
   const total = holdings.reduce((s, h) => s + (h.amount || 0), 0);
   const split = { securise: 0, croissance: 0, performance: 0 };
   if (total <= 0) return split;
-  holdings.forEach(h => { split[riskBucketForCategory(h.category)] += (h.amount || 0) / total * 100; });
+  holdings.forEach(h => { split[h.riskBucket || riskBucketForCategory(h.category)] += (h.amount || 0) / total * 100; });
   RISK_BUCKETS.forEach(b => { split[b.id] = Math.round(split[b.id] * 10) / 10; });
   // Correct rounding drift so the total is exactly 100.
   const drift = 100 - (split.securise + split.croissance + split.performance);
@@ -784,45 +810,75 @@ function showHoldingsImportPreview(rows) {
     return;
   }
   const dataRows = rows.slice(1).filter(r => r[cols.name]);
+  const hasCategoryColumn = cols.category >= 0;
 
-  const holdings = dataRows.map(r => ({
-    placement: cols.placement >= 0 ? String(r[cols.placement] || "").trim() : "",
-    contractNumber: cols.contract >= 0 ? String(r[cols.contract] || "").trim() : "",
-    product: cols.product >= 0 ? String(r[cols.product] || "").trim() : "",
-    category: cols.category >= 0 ? String(r[cols.category] || "").trim() : "",
-    subcategory: cols.subcategory >= 0 ? String(r[cols.subcategory] || "").trim() : "",
-    name: String(r[cols.name] || "").trim(),
-    isin: cols.isin >= 0 ? String(r[cols.isin] || "").trim() : "",
-    units: cols.units >= 0 ? parseAmount(r[cols.units]) : null,
-    lastQuote: cols.lastQuote >= 0 ? parseAmount(r[cols.lastQuote]) : null,
-    quoteDate: cols.quoteDate >= 0 ? parseDateCell(r[cols.quoteDate]) : null,
-    amount: parseAmount(r[cols.amount]),
-    pnl: cols.pnl >= 0 ? parseAmount(r[cols.pnl]) : null,
-    pru: cols.pru >= 0 ? parseAmount(r[cols.pru]) : null,
-  })).filter(h => h.name && !isNaN(h.amount));
+  const holdings = dataRows.map(r => {
+    const category = hasCategoryColumn ? String(r[cols.category] || "").trim() : "";
+    const name = String(r[cols.name] || "").trim();
+    const riskBucket = category ? riskBucketForCategory(category) : guessRiskBucketFromName(name);
+    return {
+      placement: cols.placement >= 0 ? String(r[cols.placement] || "").trim() : "",
+      contractNumber: cols.contract >= 0 ? String(r[cols.contract] || "").trim() : "",
+      product: cols.product >= 0 ? String(r[cols.product] || "").trim() : "",
+      category: category || `Non fourni — estimé "${RISK_BUCKETS.find(b => b.id === riskBucket).label}" d'après le nom`,
+      categoryGuessed: !category,
+      subcategory: cols.subcategory >= 0 ? String(r[cols.subcategory] || "").trim() : "",
+      name,
+      isin: cols.isin >= 0 ? String(r[cols.isin] || "").trim() : "",
+      units: cols.units >= 0 ? parseAmount(r[cols.units]) : null,
+      lastQuote: cols.lastQuote >= 0 ? parseAmount(r[cols.lastQuote]) : null,
+      quoteDate: cols.quoteDate >= 0 ? parseDateCell(r[cols.quoteDate]) : null,
+      amount: parseAmount(r[cols.amount]),
+      pnl: cols.pnl >= 0 ? parseAmount(r[cols.pnl]) : null,
+      pru: cols.pru >= 0 ? parseAmount(r[cols.pru]) : null,
+      riskBucket,
+    };
+  }).filter(h => h.name && !isNaN(h.amount));
 
-  const groupKey = h => h.contractNumber || h.product || h.name;
+  // Sans colonne Contrat/Produit (ex : export de positions BoursoBank), le fichier
+  // représente un seul portefeuille : tout regrouper au lieu d'une ligne par support.
+  const hasGroupingInfo = holdings.some(h => h.contractNumber || h.product);
+  const groupKey = h => (hasGroupingInfo ? (h.contractNumber || h.product || "__misc__") : "__single__");
   const groups = {};
   holdings.forEach(h => { (groups[groupKey(h)] = groups[groupKey(h)] || []).push(h); });
 
   pendingHoldingsGroups = Object.entries(groups).map(([key, hs]) => {
     const first = hs[0];
     const total = hs.reduce((s, h) => s + h.amount, 0);
-    const type = PLACEMENT_TO_ACCOUNT_TYPE[normalizeHeader(first.placement)] || "autre";
+    const guessedType = PLACEMENT_TO_ACCOUNT_TYPE[normalizeHeader(first.placement)]
+      || (!hasGroupingInfo && state.accounts.filter(a => a.type === "pea").length ? "pea" : "autre");
     const matchingAccount = state.accounts.find(a => a.contractNumber && a.contractNumber === first.contractNumber)
-      || state.accounts.find(a => a.name.toLowerCase() === (first.product || "").toLowerCase());
-    return { key, holdings: hs, total, type, product: first.product, contractNumber: first.contractNumber, targetAccountId: matchingAccount ? matchingAccount.id : "" };
+      || (first.product && state.accounts.find(a => a.name.toLowerCase() === first.product.toLowerCase()))
+      || (!hasGroupingInfo && state.accounts.filter(a => a.type === "pea").length === 1 ? state.accounts.find(a => a.type === "pea") : null);
+    return { key, holdings: hs, total, type: guessedType, product: first.product, contractNumber: first.contractNumber, targetAccountId: matchingAccount ? matchingAccount.id : "" };
   });
 
+  const anyGuessed = pendingHoldingsGroups.some(g => g.holdings.some(h => h.categoryGuessed));
+
   openModal(`
-    <h3>Relevé de supports — ${pendingHoldingsGroups.length} contrat(s) détecté(s)</h3>
+    <h3>Relevé de supports — ${pendingHoldingsGroups.length} portefeuille(s) détecté(s)</h3>
     ${pendingHoldingsGroups.map((g, gi) => `
       <div class="field" style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
-          <strong>${escapeHtml(g.product || g.key)}</strong>
+          <strong>${escapeHtml(g.product || (g.targetAccountId ? accountById(g.targetAccountId).name : "Portefeuille importé"))}</strong>
           <span>${formatMoneyPrecise(g.total)}</span>
         </div>
         <div class="import-note" style="margin-bottom:8px;">${g.holdings.length} support(s)${g.contractNumber ? ` · Contrat n°${escapeHtml(g.contractNumber)}` : ""}</div>
+        <div class="import-preview-table" style="max-height:180px;margin-bottom:8px;">
+          <table class="table">
+            <thead><tr><th>Support</th><th>ISIN</th><th>Catégorie</th><th class="num">Montant</th></tr></thead>
+            <tbody>
+              ${g.holdings.map(h => `
+                <tr>
+                  <td>${escapeHtml(h.name)}</td>
+                  <td>${escapeHtml(h.isin || "—")}</td>
+                  <td${h.categoryGuessed ? ' style="color:var(--amber)"' : ""}>${escapeHtml(h.category)}</td>
+                  <td class="num">${formatMoneyPrecise(h.amount)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
         <label>Associer à</label>
         <select data-group="${gi}" class="f-holdings-target">
           <option value="__new__" ${!g.targetAccountId ? "selected" : ""}>+ Créer un nouveau compte</option>
@@ -830,7 +886,7 @@ function showHoldingsImportPreview(rows) {
         </select>
       </div>
     `).join("")}
-    <div class="import-note">La répartition Sécurisé/Croissance/Performance de chaque compte sera recalculée automatiquement à partir des catégories du relevé (Fonds Euro → Sécurisé, Fonds Actions → Croissance, Produit Structuré / Private Equity → Performance).</div>
+    <div class="import-note">La répartition Sécurisé/Croissance/Performance de chaque compte sera recalculée automatiquement à partir des catégories du relevé (Fonds Euro → Sécurisé, Fonds Actions → Croissance, Produit Structuré / Private Equity → Performance).${anyGuessed ? ' Les lignes en orange n\'avaient pas de catégorie dans le fichier : la poche ABC a été estimée à partir du nom du support — à vérifier.' : ""}</div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="f-cancel">Annuler</button>
       <button class="btn btn-primary" id="f-confirm">Importer</button>
