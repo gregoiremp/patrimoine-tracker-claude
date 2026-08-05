@@ -555,13 +555,7 @@ function renderExpenses() {
 document.getElementById("importFile").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  try {
-    const rows = await parseImportFile(file);
-    showImportPreview(rows);
-  } catch (err) {
-    console.error(err);
-    alert("Impossible de lire ce fichier : " + err.message);
-  }
+  await handleImportedFile(file, "expenses");
   e.target.value = "";
 });
 
@@ -656,6 +650,42 @@ function parseDateCell(v) {
   const d = new Date(s);
   if (!isNaN(d)) return d.toISOString().slice(0, 10);
   return null;
+}
+
+// Détecte si un fichier importé (quel que soit le bouton utilisé) est un relevé de
+// dépenses ou un relevé de supports/placements, pour pouvoir rediriger l'utilisateur
+// vers le bon onglet plutôt que d'échouer silencieusement.
+function detectFileKind(headerRow) {
+  const norm = headerRow.map(normalizeHeader);
+  const matches = candidates => norm.some(h => candidates.some(c => h === normalizeHeader(c) || h.includes(normalizeHeader(c))));
+  if (matches(["isin"]) || (matches(HOLDINGS_HEADERS.name) && matches(HOLDINGS_HEADERS.amount))) return "holdings";
+  if (matches(LABEL_HEADERS) && (matches(AMOUNT_HEADERS) || matches(DEBIT_HEADERS) || matches(CREDIT_HEADERS))) return "expenses";
+  return null;
+}
+
+async function handleImportedFile(file, expectedKind) {
+  let rows;
+  try {
+    rows = await parseImportFile(file);
+  } catch (err) {
+    console.error(err);
+    alert("Impossible de lire ce fichier : " + err.message);
+    return;
+  }
+  if (!rows.length) { alert("Fichier vide."); return; }
+  const kind = detectFileKind(rows[0]);
+  if (!kind) {
+    alert("Format de fichier non reconnu : ce n'est ni un relevé de dépenses, ni un relevé de supports/placements.");
+    return;
+  }
+  if (kind !== expectedKind) {
+    const targetView = kind === "holdings" ? "accounts" : "expenses";
+    const targetLabel = kind === "holdings" ? "Comptes & placements" : "Dépenses";
+    toast(`Ce fichier ressemble à ${kind === "holdings" ? "un relevé de supports/placements" : "un relevé de dépenses"} → redirection vers l'onglet ${targetLabel}.`);
+    document.querySelector(`[data-view="${targetView}"]`).click();
+  }
+  if (kind === "holdings") showHoldingsImportPreview(rows);
+  else showImportPreview(rows);
 }
 
 let pendingImportRows = [];
@@ -789,13 +819,7 @@ function riskSplitFromHoldings(holdings) {
 document.getElementById("importHoldingsFile").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  try {
-    const rows = await parseImportFile(file);
-    showHoldingsImportPreview(rows);
-  } catch (err) {
-    console.error(err);
-    alert("Impossible de lire ce fichier : " + err.message);
-  }
+  await handleImportedFile(file, "holdings");
   e.target.value = "";
 });
 
@@ -1244,3 +1268,45 @@ function renderAll() {
 }
 
 renderAll();
+
+/* ---------- Glisser-déposer un fichier n'importe où sur la page ---------- */
+
+async function handleDroppedFile(file) {
+  let rows;
+  try {
+    rows = await parseImportFile(file);
+  } catch (err) {
+    console.error(err);
+    alert("Impossible de lire ce fichier : " + err.message);
+    return;
+  }
+  if (!rows.length) { alert("Fichier vide."); return; }
+  const kind = detectFileKind(rows[0]);
+  if (!kind) {
+    alert("Format de fichier non reconnu : ce n'est ni un relevé de dépenses, ni un relevé de supports/placements.");
+    return;
+  }
+  document.querySelector(`[data-view="${kind === "holdings" ? "accounts" : "expenses"}"]`).click();
+  if (kind === "holdings") showHoldingsImportPreview(rows);
+  else showImportPreview(rows);
+}
+
+let dragDepth = 0;
+document.addEventListener("dragover", e => { e.preventDefault(); });
+document.addEventListener("dragenter", e => {
+  if (!e.dataTransfer?.types?.includes("Files")) return;
+  e.preventDefault();
+  dragDepth++;
+  document.body.classList.add("dragging-file");
+});
+document.addEventListener("dragleave", () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) document.body.classList.remove("dragging-file");
+});
+document.addEventListener("drop", e => {
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove("dragging-file");
+  const file = e.dataTransfer?.files?.[0];
+  if (file) handleDroppedFile(file);
+});
