@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Patrimoine — Suivi financier</title>
+<link rel="stylesheet" href="style.css" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">P</div>
+      <div class="brand-name">Patrimoine</div>
+    </div>
+    <nav class="nav">
+      <button class="nav-item active" data-view="dashboard">
+        <span class="nav-icon">◆</span> Vue d'ensemble
+      </button>
+      <button class="nav-item" data-view="accounts">
+        <span class="nav-icon">▤</span> Comptes &amp; placements
+      </button>
+      <button class="nav-item" data-view="expenses">
+        <span class="nav-icon">▾</span> Dépenses
+      </button>
+      <button class="nav-item" data-view="categories">
+        <span class="nav-icon">✦</span> Catégories
+      </button>
+      <button class="nav-item" data-view="settings">
+        <span class="nav-icon">⚙</span> Données
+      </button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="netcell">
+        <div class="netcell-label">Patrimoine net</div>
+        <div class="netcell-value" id="sidebarNetWorth">0 €</div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="content">
+
+    <!-- DASHBOARD -->
+    <section class="view active" id="view-dashboard">
+      <header class="view-header">
+        <h1>Vue d'ensemble</h1>
+        <p class="subtitle">Photographie de votre patrimoine et de vos flux mensuels.</p>
+      </header>
+
+      <div class="kpi-row">
+        <div class="kpi-card">
+          <div class="kpi-label">Patrimoine net</div>
+          <div class="kpi-value" id="kpiNetWorth">0 €</div>
+          <div class="kpi-delta" id="kpiNetWorthDelta">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Liquidités</div>
+          <div class="kpi-value" id="kpiLiquid">0 €</div>
+          <div class="kpi-sub" id="kpiLiquidSub">Comptes courants + livrets</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Placements &amp; épargne</div>
+          <div class="kpi-value" id="kpiInvested">0 €</div>
+          <div class="kpi-sub" id="kpiInvestedSub">Assurance-vie, PEA, etc.</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Dépenses ce mois</div>
+          <div class="kpi-value" id="kpiExpenses">0 €</div>
+          <div class="kpi-sub" id="kpiExpensesSub">—</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-header">
+            <h2>Évolution du patrimoine</h2>
+          </div>
+          <div class="chart-wrap"><canvas id="chartNetWorth"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Répartition par type</h2></div>
+          <div class="chart-wrap chart-wrap-small"><canvas id="chartAllocation"></canvas></div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-header"><h2>Allocation ABC — cible vs réelle</h2></div>
+          <div class="chart-wrap chart-wrap-small"><canvas id="chartRiskAllocation"></canvas></div>
+          <div class="import-note" id="riskAllocationNote"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Dépenses par catégorie (mois en cours)</h2></div>
+          <div class="chart-wrap chart-wrap-small"><canvas id="chartExpensesByCategory"></canvas></div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-bottom:14px;">
+        <div class="panel-header"><h2>Dépenses mensuelles (12 derniers mois)</h2></div>
+        <div class="chart-wrap"><canvas id="chartMonthlyExpenses"></canvas></div>
+      </div>
+    </section>
+
+    <!-- ACCOUNTS -->
+    <section class="view" id="view-accounts">
+      <header class="view-header">
+        <h1>Comptes &amp; placements</h1>
+        <p class="subtitle">Comptes bancaires, livrets, assurance-vie, PEA, immobilier, crypto…</p>
+        <button class="btn btn-primary" id="btnAddAccount">+ Ajouter un compte</button>
+      </header>
+
+      <div class="account-groups" id="accountGroups"></div>
+    </section>
+
+    <!-- EXPENSES -->
+    <section class="view" id="view-expenses">
+      <header class="view-header">
+        <h1>Dépenses</h1>
+        <p class="subtitle">Importez vos relevés (CSV/Excel) ou ajoutez une dépense manuellement.</p>
+        <div class="header-actions">
+          <label class="btn btn-primary" for="importFile">⇪ Importer un extrait (CSV / Excel)</label>
+          <input type="file" id="importFile" accept=".csv,.xlsx,.xls" hidden />
+          <button class="btn btn-ghost" id="btnAddExpense">+ Ajouter manuellement</button>
+        </div>
+      </header>
+
+      <div class="filters">
+        <select id="filterMonth"></select>
+        <select id="filterCategory"></select>
+        <select id="filterAccount"></select>
+        <input type="text" id="filterSearch" placeholder="Rechercher un libellé…" />
+      </div>
+
+      <div class="panel">
+        <table class="table" id="expensesTable">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Libellé</th>
+              <th>Catégorie</th>
+              <th>Compte</th>
+              <th class="num">Montant</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="expensesBody"></tbody>
+        </table>
+        <div class="empty-state" id="expensesEmpty" hidden>Aucune dépense pour ce filtre.</div>
+      </div>
+    </section>
+
+    <!-- CATEGORIES -->
+    <section class="view" id="view-categories">
+      <header class="view-header">
+        <h1>Catégories</h1>
+        <p class="subtitle">Les mots-clés permettent la catégorisation automatique lors de l'import.</p>
+        <button class="btn btn-primary" id="btnAddCategory">+ Nouvelle catégorie</button>
+      </header>
+      <div class="panel">
+        <table class="table" id="categoriesTable">
+          <thead><tr><th>Couleur</th><th>Catégorie</th><th>Mots-clés (import auto)</th><th></th></tr></thead>
+          <tbody id="categoriesBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="view" id="view-settings">
+      <header class="view-header">
+        <h1>Données</h1>
+        <p class="subtitle">Tout est stocké localement dans votre navigateur (localStorage). Rien n'est envoyé sur internet.</p>
+      </header>
+      <div class="panel settings-panel">
+        <h2>Allocation cible (stratégie ABC)</h2>
+        <p>Répartition visée entre Sécurisé, Croissance et Performance — doit totaliser 100%. Chaque compte peut ensuite y être rattaché (en tout ou en partie) depuis sa fiche.</p>
+        <div class="risk-split-row">
+          <div class="risk-split-cell">
+            <span class="risk-split-dot" style="background:#3ecf8e"></span>
+            <input type="number" min="0" max="100" step="1" id="target-securise" />
+            <label>Sécurisé</label>
+          </div>
+          <div class="risk-split-cell">
+            <span class="risk-split-dot" style="background:#6c8cff"></span>
+            <input type="number" min="0" max="100" step="1" id="target-croissance" />
+            <label>Croissance</label>
+          </div>
+          <div class="risk-split-cell">
+            <span class="risk-split-dot" style="background:#f2637a"></span>
+            <input type="number" min="0" max="100" step="1" id="target-performance" />
+            <label>Performance</label>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="btnSaveTargetAllocation" style="margin-top:12px;">Enregistrer la cible</button>
+      </div>
+      <div class="panel settings-panel">
+        <h2>Sauvegarde</h2>
+        <p>Exportez régulièrement une sauvegarde JSON de vos données.</p>
+        <div class="header-actions">
+          <button class="btn btn-primary" id="btnExportJson">⇩ Exporter (JSON)</button>
+          <label class="btn btn-ghost" for="importJson">⇪ Restaurer une sauvegarde</label>
+          <input type="file" id="importJson" accept=".json" hidden />
+          <button class="btn btn-danger" id="btnResetAll">Réinitialiser toutes les données</button>
+        </div>
+      </div>
+      <div class="panel settings-panel">
+        <h2>Format d'import attendu</h2>
+        <p>Le fichier CSV/Excel doit contenir au minimum une colonne date, une colonne libellé et une colonne montant. Les en-têtes courants sont détectés automatiquement (Date, Libellé/Label/Description, Montant/Amount/Débit/Crédit).</p>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- Generic modal -->
+<div class="modal-overlay" id="modalOverlay" hidden>
+  <div class="modal" id="modal"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

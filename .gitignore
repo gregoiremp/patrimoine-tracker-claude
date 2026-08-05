@@ -1,0 +1,4 @@
+ma-situation*.json
+*-backup-*.json
+patrimoine-backup-*.json
+.DS_Store
