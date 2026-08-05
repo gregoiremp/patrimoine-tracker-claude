@@ -23,6 +23,26 @@ const RISK_BUCKETS = [
 
 const DEFAULT_TARGET_ALLOCATION = { securise: 50, croissance: 35, performance: 15 };
 
+// Mapping des catégories d'un relevé de supports (Linxea et assimilés) vers les poches ABC.
+// Les catégories non reconnues sont classées en "croissance" par défaut.
+const HOLDINGS_CATEGORY_RISK_MAP = {
+  "fonds euro": "securise",
+  "fonds actions": "croissance",
+  "produit structure": "performance",
+  "fonds private equity": "performance",
+  "fonds obligataire": "securise",
+  "fonds diversifie": "croissance",
+  "fonds immobilier": "performance",
+};
+
+const PLACEMENT_TO_ACCOUNT_TYPE = {
+  "assurance vie": "assurance_vie",
+  "pea": "pea",
+  "pea-pme": "pea",
+  "compte-titres": "cto",
+  "compte titres": "cto",
+};
+
 const DEFAULT_CATEGORIES = [
   { id: "logement", name: "Logement", color: "#6c8cff", keywords: ["loyer", "edf", "engie", "eau", "syndic", "assurance habitation"] },
   { id: "alimentation", name: "Alimentation", color: "#3ecf8e", keywords: ["carrefour", "leclerc", "monoprix", "franprix", "lidl", "auchan", "boulangerie"] },
@@ -42,7 +62,7 @@ function loadState() {
       const data = JSON.parse(raw);
       data.settings = { targetAllocation: { ...DEFAULT_TARGET_ALLOCATION, ...(data.settings?.targetAllocation || {}) } };
       data.accounts = (data.accounts || []).map(a => ({
-        note: "", riskSplit: { securise: 0, croissance: 0, performance: 0 }, ...a,
+        note: "", riskSplit: { securise: 0, croissance: 0, performance: 0 }, contractNumber: "", holdings: [], ...a,
       }));
       return data;
     }
@@ -117,14 +137,16 @@ function setView(view) {
 const modalOverlay = document.getElementById("modalOverlay");
 const modalEl = document.getElementById("modal");
 
-function openModal(html, onMount) {
+function openModal(html, onMount, { large = false } = {}) {
   modalEl.innerHTML = html;
+  modalEl.classList.toggle("modal-lg", large);
   modalOverlay.hidden = false;
   if (onMount) onMount(modalEl);
 }
 function closeModal() {
   modalOverlay.hidden = true;
   modalEl.innerHTML = "";
+  modalEl.classList.remove("modal-lg");
 }
 modalOverlay.addEventListener("click", e => { if (e.target === modalOverlay) closeModal(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
@@ -270,6 +292,7 @@ function renderAccounts() {
               <div class="a-balance">${formatMoneyPrecise(a.balance)}</div>
               ${riskSplitBar(a.riskSplit)}
               ${a.note ? `<div class="a-note">${escapeHtml(a.note)}</div>` : ""}
+              ${a.holdings && a.holdings.length ? `<button class="a-composition">▾ Composition (${a.holdings.length} supports)</button>` : ""}
             </div>
           `).join("")}
         </div>
@@ -280,7 +303,41 @@ function renderAccounts() {
     const acc = accountById(card.dataset.id);
     card.querySelector(".a-edit").addEventListener("click", () => openAccountModal(acc));
     card.querySelector(".a-balance").addEventListener("click", () => updateBalanceQuick(acc));
+    card.querySelector(".a-composition")?.addEventListener("click", () => openHoldingsModal(acc));
   });
+}
+
+function openHoldingsModal(account) {
+  const total = account.holdings.reduce((s, h) => s + (h.amount || 0), 0);
+  const byCategory = {};
+  account.holdings.forEach(h => { byCategory[h.category || "Autre"] = (byCategory[h.category || "Autre"] || 0) + h.amount; });
+  openModal(`
+    <h3>Composition — ${escapeHtml(account.name)}</h3>
+    <div class="import-note" style="margin-bottom:10px;">
+      ${Object.entries(byCategory).map(([cat, amt]) => `${escapeHtml(cat)} : ${Math.round(amt / total * 1000) / 10}%`).join(" · ")}
+      ${account.contractNumber ? ` · Contrat n°${escapeHtml(account.contractNumber)}` : ""}
+    </div>
+    <div class="import-preview-table">
+      <table class="table">
+        <thead><tr><th>Support</th><th>ISIN</th><th>Catégorie</th><th class="num">Montant</th><th class="num">+/- value</th></tr></thead>
+        <tbody>
+          ${account.holdings.map(h => `
+            <tr>
+              <td>${escapeHtml(h.name)}</td>
+              <td>${escapeHtml(h.isin || "—")}</td>
+              <td>${escapeHtml(h.category || "—")}</td>
+              <td class="num">${formatMoneyPrecise(h.amount)}</td>
+              <td class="num ${h.pnl > 0 ? "amount-pos" : h.pnl < 0 ? "amount-neg" : ""}">${h.pnl !== undefined && h.pnl !== null ? formatMoneyPrecise(h.pnl) : "—"}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="import-note">Dernière mise à jour : ${account.holdings[0]?.quoteDate ? formatDate(account.holdings[0].quoteDate) : "—"}. Pour rafraîchir, réimportez un relevé de supports à jour depuis l'espace client de l'assureur/courtier (onglet Comptes).</div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="f-close">Fermer</button>
+    </div>
+  `, m => { m.querySelector("#f-close").onclick = closeModal; }, { large: true });
 }
 
 /* ---------- Categories ---------- */
@@ -657,7 +714,158 @@ function showImportPreview(rows) {
       saveState(); closeModal(); renderAll();
       toast(`${count} dépense(s) importée(s).`);
     };
+  }, { large: true });
+}
+
+/* ---------- Import d'un relevé de supports (assurance-vie, PEA…) ---------- */
+
+const HOLDINGS_HEADERS = {
+  placement: ["placement"],
+  contract: ["n° contrat", "no contrat", "numero contrat", "n contrat"],
+  product: ["produit"],
+  category: ["categorie"],
+  subcategory: ["sous-categorie", "sous categorie"],
+  name: ["nom du support"],
+  isin: ["isin"],
+  units: ["nbre de parts", "nombre de parts"],
+  lastQuote: ["derniere cotation"],
+  quoteDate: ["date"],
+  amount: ["somme en compte"],
+  pnl: ["plus ou moins value"],
+  pru: ["prix de revient moyen"],
+};
+
+function detectHoldingsColumns(headerRow) {
+  const norm = headerRow.map(normalizeHeader);
+  const find = (candidates) => norm.findIndex(h => candidates.some(c => h === normalizeHeader(c) || h.includes(normalizeHeader(c))));
+  const cols = {};
+  Object.entries(HOLDINGS_HEADERS).forEach(([key, candidates]) => { cols[key] = find(candidates); });
+  return cols;
+}
+
+function riskBucketForCategory(category) {
+  const key = normalizeHeader(category || "");
+  return HOLDINGS_CATEGORY_RISK_MAP[key] || "croissance";
+}
+
+function riskSplitFromHoldings(holdings) {
+  const total = holdings.reduce((s, h) => s + (h.amount || 0), 0);
+  const split = { securise: 0, croissance: 0, performance: 0 };
+  if (total <= 0) return split;
+  holdings.forEach(h => { split[riskBucketForCategory(h.category)] += (h.amount || 0) / total * 100; });
+  RISK_BUCKETS.forEach(b => { split[b.id] = Math.round(split[b.id] * 10) / 10; });
+  // Correct rounding drift so the total is exactly 100.
+  const drift = 100 - (split.securise + split.croissance + split.performance);
+  split.croissance = Math.round((split.croissance + drift) * 10) / 10;
+  return split;
+}
+
+document.getElementById("importHoldingsFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const rows = await parseImportFile(file);
+    showHoldingsImportPreview(rows);
+  } catch (err) {
+    console.error(err);
+    alert("Impossible de lire ce fichier : " + err.message);
+  }
+  e.target.value = "";
+});
+
+let pendingHoldingsGroups = [];
+
+function showHoldingsImportPreview(rows) {
+  if (rows.length < 2) { alert("Fichier vide ou format non reconnu."); return; }
+  const headerRow = rows[0];
+  const cols = detectHoldingsColumns(headerRow);
+  if (cols.name < 0 || cols.amount < 0) {
+    alert("Ce fichier ne ressemble pas à un relevé de supports (colonnes \"Nom du support\" / \"Somme en Compte\" introuvables).");
+    return;
+  }
+  const dataRows = rows.slice(1).filter(r => r[cols.name]);
+
+  const holdings = dataRows.map(r => ({
+    placement: cols.placement >= 0 ? String(r[cols.placement] || "").trim() : "",
+    contractNumber: cols.contract >= 0 ? String(r[cols.contract] || "").trim() : "",
+    product: cols.product >= 0 ? String(r[cols.product] || "").trim() : "",
+    category: cols.category >= 0 ? String(r[cols.category] || "").trim() : "",
+    subcategory: cols.subcategory >= 0 ? String(r[cols.subcategory] || "").trim() : "",
+    name: String(r[cols.name] || "").trim(),
+    isin: cols.isin >= 0 ? String(r[cols.isin] || "").trim() : "",
+    units: cols.units >= 0 ? parseAmount(r[cols.units]) : null,
+    lastQuote: cols.lastQuote >= 0 ? parseAmount(r[cols.lastQuote]) : null,
+    quoteDate: cols.quoteDate >= 0 ? parseDateCell(r[cols.quoteDate]) : null,
+    amount: parseAmount(r[cols.amount]),
+    pnl: cols.pnl >= 0 ? parseAmount(r[cols.pnl]) : null,
+    pru: cols.pru >= 0 ? parseAmount(r[cols.pru]) : null,
+  })).filter(h => h.name && !isNaN(h.amount));
+
+  const groupKey = h => h.contractNumber || h.product || h.name;
+  const groups = {};
+  holdings.forEach(h => { (groups[groupKey(h)] = groups[groupKey(h)] || []).push(h); });
+
+  pendingHoldingsGroups = Object.entries(groups).map(([key, hs]) => {
+    const first = hs[0];
+    const total = hs.reduce((s, h) => s + h.amount, 0);
+    const type = PLACEMENT_TO_ACCOUNT_TYPE[normalizeHeader(first.placement)] || "autre";
+    const matchingAccount = state.accounts.find(a => a.contractNumber && a.contractNumber === first.contractNumber)
+      || state.accounts.find(a => a.name.toLowerCase() === (first.product || "").toLowerCase());
+    return { key, holdings: hs, total, type, product: first.product, contractNumber: first.contractNumber, targetAccountId: matchingAccount ? matchingAccount.id : "" };
   });
+
+  openModal(`
+    <h3>Relevé de supports — ${pendingHoldingsGroups.length} contrat(s) détecté(s)</h3>
+    ${pendingHoldingsGroups.map((g, gi) => `
+      <div class="field" style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+          <strong>${escapeHtml(g.product || g.key)}</strong>
+          <span>${formatMoneyPrecise(g.total)}</span>
+        </div>
+        <div class="import-note" style="margin-bottom:8px;">${g.holdings.length} support(s)${g.contractNumber ? ` · Contrat n°${escapeHtml(g.contractNumber)}` : ""}</div>
+        <label>Associer à</label>
+        <select data-group="${gi}" class="f-holdings-target">
+          <option value="__new__" ${!g.targetAccountId ? "selected" : ""}>+ Créer un nouveau compte</option>
+          ${state.accounts.map(a => `<option value="${a.id}" ${g.targetAccountId === a.id ? "selected" : ""}>${escapeHtml(a.name)} (mettre à jour)</option>`).join("")}
+        </select>
+      </div>
+    `).join("")}
+    <div class="import-note">La répartition Sécurisé/Croissance/Performance de chaque compte sera recalculée automatiquement à partir des catégories du relevé (Fonds Euro → Sécurisé, Fonds Actions → Croissance, Produit Structuré / Private Equity → Performance).</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="f-cancel">Annuler</button>
+      <button class="btn btn-primary" id="f-confirm">Importer</button>
+    </div>
+  `, m => {
+    m.querySelector("#f-cancel").onclick = () => { pendingHoldingsGroups = []; closeModal(); };
+    m.querySelectorAll(".f-holdings-target").forEach(sel => {
+      sel.addEventListener("change", () => { pendingHoldingsGroups[sel.dataset.group].targetAccountId = sel.value === "__new__" ? "" : sel.value; });
+    });
+    m.querySelector("#f-confirm").onclick = () => {
+      const todayIso = new Date().toISOString().slice(0, 10);
+      pendingHoldingsGroups.forEach(g => {
+        const riskSplit = riskSplitFromHoldings(g.holdings);
+        let account = g.targetAccountId ? accountById(g.targetAccountId) : null;
+        if (!account) {
+          account = {
+            id: uid(), name: g.product || g.key, type: g.type, balance: 0,
+            note: "", riskSplit: { securise: 0, croissance: 0, performance: 0 },
+            contractNumber: g.contractNumber, holdings: [], history: [],
+          };
+          state.accounts.push(account);
+        }
+        account.contractNumber = g.contractNumber || account.contractNumber;
+        account.holdings = g.holdings;
+        account.riskSplit = riskSplit;
+        if (account.balance !== g.total) {
+          account.balance = g.total;
+          account.history.push({ date: todayIso, balance: g.total });
+        }
+      });
+      pendingHoldingsGroups = [];
+      saveState(); closeModal(); renderAll();
+      toast("Relevé de supports importé.");
+    };
+  }, { large: true });
 }
 
 /* ---------- Settings: export / import / reset ---------- */

@@ -109,7 +109,11 @@
       <header class="view-header">
         <h1>Comptes &amp; placements</h1>
         <p class="subtitle">Comptes bancaires, livrets, assurance-vie, PEA, immobilier, crypto…</p>
-        <button class="btn btn-primary" id="btnAddAccount">+ Ajouter un compte</button>
+        <div class="header-actions">
+          <button class="btn btn-primary" id="btnAddAccount">+ Ajouter un compte</button>
+          <label class="btn btn-ghost" for="importHoldingsFile">⇪ Importer un relevé de supports (Linxea…)</label>
+          <input type="file" id="importHoldingsFile" accept=".csv,.xlsx,.xls" hidden />
+        </div>
       </header>
 
       <div class="account-groups" id="accountGroups"></div>

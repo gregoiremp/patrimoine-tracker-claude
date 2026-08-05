@@ -209,6 +209,13 @@ html, body {
 .risk-split-cell label { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
 .risk-split-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
+.a-composition {
+  margin-top: 10px; width: 100%; text-align: left;
+  background: transparent; border: none; color: var(--accent);
+  font-size: 11.5px; cursor: pointer; padding: 0;
+}
+.a-composition:hover { text-decoration: underline; }
+
 /* Filters */
 .filters { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 .filters select, .filters input {
@@ -275,6 +282,7 @@ html, body {
   max-height: 86vh;
   overflow-y: auto;
 }
+.modal.modal-lg { width: 640px; }
 .modal h3 { margin: 0 0 16px; font-size: 16px; }
 .field { margin-bottom: 14px; }
 .field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
