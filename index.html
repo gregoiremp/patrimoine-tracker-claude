@@ -3,40 +3,64 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="color-scheme" content="dark light" />
 <title>Patrimoine — Suivi financier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700;750&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="style.css" />
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+  (function () {
+    var saved = localStorage.getItem("financeTracker.theme");
+    var theme = saved || (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    document.documentElement.dataset.theme = theme;
+  })();
+</script>
 </head>
 <body>
-<div class="app">
+<div class="app" id="appRoot">
 
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-mark">P</div>
-      <div class="brand-name">Patrimoine</div>
+      <div class="brand-left">
+        <div class="brand-mark">P</div>
+        <div class="brand-name">Patrimoine</div>
+      </div>
+      <button class="sidebar-toggle" id="sidebarToggle" title="Réduire le menu" aria-label="Réduire ou étendre le menu">◂</button>
     </div>
     <nav class="nav">
-      <button class="nav-item active" data-view="dashboard">
-        <span class="nav-icon">◆</span> Vue d'ensemble
+      <button class="nav-item active" data-view="dashboard" title="Vue d'ensemble">
+        <span class="nav-icon">◆</span><span class="nav-label">Vue d'ensemble</span>
       </button>
-      <button class="nav-item" data-view="accounts">
-        <span class="nav-icon">▤</span> Comptes &amp; placements
+      <button class="nav-item" data-view="accounts" title="Comptes &amp; placements">
+        <span class="nav-icon">▤</span><span class="nav-label">Comptes &amp; placements</span>
       </button>
-      <button class="nav-item" data-view="expenses">
-        <span class="nav-icon">▾</span> Dépenses
+      <button class="nav-item" data-view="expenses" title="Dépenses">
+        <span class="nav-icon">▾</span><span class="nav-label">Dépenses</span>
       </button>
-      <button class="nav-item" data-view="categories">
-        <span class="nav-icon">✦</span> Catégories
+      <button class="nav-item" data-view="categories" title="Catégories">
+        <span class="nav-icon">✦</span><span class="nav-label">Catégories</span>
       </button>
-      <button class="nav-item" data-view="settings">
-        <span class="nav-icon">⚙</span> Données
+      <button class="nav-item" data-view="budget" title="Budget">
+        <span class="nav-icon">↝</span><span class="nav-label">Budget</span>
+      </button>
+      <button class="nav-item" data-view="settings" title="Données">
+        <span class="nav-icon">⚙</span><span class="nav-label">Données</span>
       </button>
     </nav>
     <div class="sidebar-footer">
-      <div class="netcell">
-        <div class="netcell-label">Patrimoine net</div>
-        <div class="netcell-value" id="sidebarNetWorth">0 €</div>
+      <div class="theme-toggle">
+        <span class="theme-toggle-label"><span id="themeIcon">🌙</span><span class="txt">Mode sombre</span></span>
+        <button class="switch" id="themeSwitch" role="switch" aria-label="Basculer le thème clair/sombre"></button>
+      </div>
+      <div class="profile-card">
+        <div class="profile-avatar">GM</div>
+        <div class="profile-info">
+          <div class="netcell-label">Patrimoine net</div>
+          <div class="netcell-value" id="sidebarNetWorth">0 €</div>
+        </div>
       </div>
     </div>
   </aside>
@@ -119,6 +143,11 @@
       <div class="account-groups" id="accountGroups"></div>
     </section>
 
+    <!-- ACCOUNT DETAIL -->
+    <section class="view" id="view-account-detail">
+      <div id="accountDetailRoot"></div>
+    </section>
+
     <!-- EXPENSES -->
     <section class="view" id="view-expenses">
       <header class="view-header">
@@ -131,29 +160,62 @@
         </div>
       </header>
 
+      <div class="gamify-banner" id="gamifyBanner" hidden>
+        <div class="gamify-banner-text">
+          <strong id="gamifyBannerCount">0</strong> dépense(s) encore classées « Autre » — envie de les trier vite fait ?
+        </div>
+        <button class="btn btn-primary btn-sm" id="btnOpenGamify">🎯 Catégoriser mes dépenses</button>
+      </div>
+
       <div class="filters">
         <select id="filterMonth"></select>
         <select id="filterCategory"></select>
         <select id="filterAccount"></select>
+        <select id="filterInternal">
+          <option value="">Tout afficher</option>
+          <option value="hide">Masquer les mouvements internes</option>
+          <option value="only">Mouvements internes uniquement</option>
+        </select>
         <input type="text" id="filterSearch" placeholder="Rechercher un libellé…" />
+        <button class="btn btn-ghost btn-sm" id="btnDetectInternal">🔎 Détecter les mouvements internes</button>
+      </div>
+
+      <div class="bulk-toolbar" id="bulkToolbar">
+        <span><span class="bt-count" id="bulkCount">0</span> sélectionnée(s)</span>
+        <div class="bt-actions">
+          <button class="btn btn-sm btn-ghost" id="bulkRecategorize">Changer la catégorie</button>
+          <button class="btn btn-sm btn-ghost" id="bulkSetAccount">Associer à un compte</button>
+          <button class="btn btn-sm btn-ghost" id="bulkMarkInternal">⇄ Marquer comme interne</button>
+          <button class="btn btn-sm btn-danger" id="bulkDelete">Supprimer</button>
+        </div>
+        <button class="bt-clear" id="bulkClear" title="Annuler la sélection">✕</button>
       </div>
 
       <div class="panel">
+        <div class="table-scroll">
         <table class="table" id="expensesTable">
           <thead>
             <tr>
-              <th>Date</th>
-              <th>Libellé</th>
-              <th>Catégorie</th>
-              <th>Compte</th>
-              <th class="num">Montant</th>
+              <th class="chk-col"><input type="checkbox" id="selectAllExpenses" aria-label="Tout sélectionner" /></th>
+              <th class="sortable" data-sort="date">Date <span class="sort-arrow">▲</span></th>
+              <th class="sortable" data-sort="label">Libellé <span class="sort-arrow">▲</span></th>
+              <th class="sortable" data-sort="category">Catégorie <span class="sort-arrow">▲</span></th>
+              <th class="sortable" data-sort="account">Compte <span class="sort-arrow">▲</span></th>
+              <th class="num sortable" data-sort="amount">Montant <span class="sort-arrow">▲</span></th>
               <th></th>
             </tr>
           </thead>
           <tbody id="expensesBody"></tbody>
         </table>
-        <div class="empty-state" id="expensesEmpty" hidden>Aucune dépense pour ce filtre.</div>
+        </div>
+        <div class="empty-state" id="expensesEmpty" hidden></div>
+        <div class="pagination" id="expensesPagination"></div>
       </div>
+    </section>
+
+    <!-- GAMIFIED CATEGORIZATION -->
+    <section class="view" id="view-gamify">
+      <div id="gamifyRoot"></div>
     </section>
 
     <!-- CATEGORIES -->
@@ -171,12 +233,31 @@
       </div>
     </section>
 
+    <!-- BUDGET -->
+    <section class="view" id="view-budget">
+      <header class="view-header">
+        <h1>Budget</h1>
+        <p class="subtitle">Détecté automatiquement à partir de l'historique de vos dépenses : ce qui revient chaque mois, à peu près au même montant et à la même période.</p>
+        <div class="header-actions">
+          <button class="btn btn-primary" id="btnAnalyzeBudget">🔄 Analyser mes dépenses</button>
+        </div>
+      </header>
+      <div id="budgetRoot"></div>
+    </section>
+
     <!-- SETTINGS -->
     <section class="view" id="view-settings">
       <header class="view-header">
         <h1>Données</h1>
         <p class="subtitle">Tout est stocké localement dans votre navigateur (localStorage). Rien n'est envoyé sur internet.</p>
       </header>
+      <div class="dropzone" id="dataDropzone" tabindex="0" role="button">
+        <div class="dropzone-icon">⇪</div>
+        <div class="dropzone-title">Déposez un fichier ici, ou cliquez pour parcourir</div>
+        <div class="dropzone-sub">Extrait de dépenses, relevé de supports PEA/CTO/assurance-vie… le format est détecté automatiquement.</div>
+        <input type="file" id="dataDropzoneInput" accept=".csv,.xlsx,.xls" hidden />
+      </div>
+
       <div class="panel settings-panel">
         <h2>Allocation cible (stratégie ABC)</h2>
         <p>Répartition visée entre Sécurisé, Croissance et Performance — doit totaliser 100%. Chaque compte peut ensuite y être rattaché (en tout ou en partie) depuis sa fiche.</p>
